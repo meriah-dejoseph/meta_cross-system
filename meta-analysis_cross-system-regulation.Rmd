@@ -1,0 +1,1414 @@
+---
+title: "Adrenocortical and autonomic cross-system regulation in youth: A meta-analysis"
+author: "Meriah DeJoseph"
+date: "2021-2023"
+output: html_document
+---
+
+Adrenocortical and autonomic cross-system regulation in youth: A meta-analysis. PROPSERO preregistration (ID #244929) can be found here: https://www.crd.york.ac.uk/prospero/display_record.php?RecordID=244929
+
+All analyses for this meta-analysis are below using the metafor package, thanks to the guidance from this OSF tutorial:
+https://osf.io/q8stz/?view_only=
+Moreau, D., & Gamble, B. (2022). Conducting a Meta-Analysis in the Age of Open Science: Tools, Tips, and Practical Recommendations. Psychological Methods, 27 (3), 426-432.
+
+For this project, we are using multivariate mixed-effects meta regression models based on rationale from Cheung 2019 (which compared multivariate vs. 3-level multilevel models for meta-analyses).
+
+### Load libraries and data
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+# Load libraries
+library(pacman)
+library(tidyverse)
+library(metafor)
+
+# Set wd
+setwd("/Users/meriahdejoseph/Library/CloudStorage/Box-Box/!ICD/Meta-Analysis/Analyses/R2 re-run analyses")
+
+# Import data & remove rows without effect sizes
+rawdf <- read_csv("Coding sheet_8.15.23.csv")
+rawdf$ES <- as.numeric(rawdf$ES)
+df <- rawdf %>% 
+  drop_na(ES)
+
+#Quick descriptives needed for paper:
+descript <- df %>% 
+  filter(ES_ID == 1) %>% 
+  summarise(Mean = mean(AGE_MEAN_YRS, na.rm=TRUE),
+            SD = sd(AGE_MEAN_YRS, na.rm=TRUE),
+            R = range(AGE_MEAN_YRS, na.rm=TRUE))
+
+
+```
+
+### Calculate basic effect sizes and variance
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+# Calculate effect size and variances using escalc() function from metafor package
+
+# from correlations (Pearson's r)
+es_from_r <- escalc(measure = "COR",         # we are generating r values
+                    ri = ES,                  # the inputted r values
+                    ni = N,                  # column containing total sample size
+                    data = df,               # dataframe
+                    slab = REF)              # study labels
+
+# effect sizes calculated above
+es <- es_from_r$yi
+
+# variances calculated above
+variance <- es_from_r$vi
+
+#lower <- exp(es_from_r$yi - 1.96*sqrt(es_from_r$vi))
+#upper <- exp(es_from_r$yi + 1.96*sqrt(es_from_r$vi))
+
+# append the new effect sizes and variances to the main data frame
+df <- cbind(df, es, variance)
+
+# Note that the two examples of effect sizes provided above are not exhaustive--other types of effect sizes can be encountered in meta-analyses (e.g., odds ratio, risk ratio), for which the present script can easily be adapted.
+
+#save out refs for forest list
+refs <- as.data.frame(df$REF)
+ES2 <- as.data.frame(df$es)
+relat <- as.data.frame(df$RELATION)
+refs <- cbind(refs, relat, ES2)
+write.csv(refs,"refs.csv")
+
+```
+
+### Multivariate mixed effects meta regression model 
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+main_model <- rma.mv(ES, variance, mods = ~ RELATION - 1,
+              random = ~ RELATION | ID, 
+              struct = "UN",
+              slab = REF,
+              method = "ML",
+              data =df)
+print(main_model, digits = 3)
+
+# This is what Berkey et al. (1998) call a multivariate maximum likelihood (MML) random-effects model. Note that rma.mv() uses REML estimation by default, so
+# method="ML"must be explicitly requested. The random = ~ outcome | study ID
+# part adds random effects for each outcome within each study to the model. With
+# struct="UN", the random effects are allowed to have different variances for each outcome and are allowed to be correlated.
+#https://www.metafor-project.org/doku.php/analyses:berkey1998
+# Berkey, C. S., Hoaglin, D. C., Antczak-Bouckoms, A., Mosteller, F., & Colditz, G. A. (1998). Meta-analysis of multiple outcomes by regression with random effects. Statistics in Medicine, 17(22), 2537–2550.
+```
+
+### Get range of rs to report in results
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+df %>% 
+  filter(RELATION=="HPA-SNS baseline") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+df %>% 
+  filter(RELATION=="HPA-SNS reactivity") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+df %>% 
+  filter(RELATION=="HPA-PNS baseline") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+df %>% 
+  filter(RELATION=="HPA-PNS reactivity") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+df %>% 
+  filter(RELATION=="SNS-PNS baseline") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+df %>% 
+  filter(RELATION=="SNS-PNS reactivity") %>% 
+  summarize(mean = mean(ES, na.rm = TRUE),
+            min = min(ES, na.rm = TRUE),
+            max = max(ES, na.rm = TRUE))
+
+```
+
+### Calculate heterogeneity
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+# Calculate the I^2 statistic for a multilevel model
+# Tells you proportion of variation across the inc effect sizes that's likely to due real diff
+# between those studies rather than diff due to random variation and error 
+# Using the formula from www.metafor-project.org/doku.php/tips:i2_multilevel_multivariate
+
+V <- bldiag(df$variance)
+W <- solve(V)
+X <- model.matrix(main_model)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+I2_statistic <- 100 * main_model$tau2 / (main_model$tau2 + (main_model$k-main_model$p)/sum(diag(P)))
+
+#Percentage of variation across effects sizes are actually due to real diff between studies
+#            estim   sqrt  k.lvl  fixed               level 
+# tau^2.1    0.002  0.047     16     no    HPA-PNS baseline 
+# tau^2.2    0.022  0.147     20     no  HPA-PNS reactivity 
+# tau^2.3    0.005  0.072     30     no    HPA-SNS baseline 
+# tau^2.4    0.018  0.135     43     no  HPA-SNS reactivity 
+# tau^2.5    0.002  0.042     11     no    SNS-PNS baseline 
+# tau^2.6    0.036  0.189     13     no  SNS-PNS reactivity 
+#25.44019 77.03865 44.78483 73.79755 21.40558 84.71884
+#23.06003 65.19464 43.39072 73.62356 26.25312 83.08556
+
+```
+
+### Create combined forest plot
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+# Save output as pdf
+pdf("ForestPlot.pdf", family = "Helvetica", width = 12, height = 25)
+
+# Decrease margins so the full space is used
+par(mar=c(2.5,4,1,2.5), cex = .9, font = 1)
+
+# Create the forest plot
+forest(main_model, 
+       xlim = c(-2.5, 1.8),                 # adjust horizontal plot region limits
+       #order ="obs",                        # order by effect size
+       addfit = F,                          # add standard summary polygon
+       annotate = T,                        # remove annotations
+       width = 0,                           # width of annotations
+       efac = .55,                          # height of CI bars
+       pch = 19,                            # changing point symbol to filled circle
+       col = "gray40",                      # change color of points/CIs
+       clim = c(-1 ,1),                     # set absolute limits for CIs
+       cex.lab = 1,                         # increase size of x-axis title
+       cex.axis = 1,                        # increase size of x-axis labels
+       cex = .85,                           # set font expansion factor
+       lty = c("solid",                     # CI line type
+               "solid",                     # credibility interval line type
+               "solid"),                    # horizontal line type
+       xlab = "",                           # label X axis
+       mlab = "RE Model: p = .04, I2 = 93.9",    # label summary estimate
+       showweights=F,  
+       ilab=df$RELATION, 
+       ilab.xpos=-1.1, 
+       steps = 5)                           # number of tick marks for the x-axis
+
+# Switch to bold font
+par(cex = .9, font = 2)
+
+# Add column headings to the plot
+text(-2.5, 135, "Study name", pos = 4, cex = .9)
+text(1.8, 135, "Correlation and 95% CI", pos = 2, cex = .9)
+text(-1.1, 135, "Outcome", font=2)
+
+# Close off set par back to the original settings
+dev.off()
+
+op <- par(cex = .9, font = 1)
+par(op)
+
+#Use this plot to extract the individual effects in the format needed for the better publication plots below
+
+```
+
+### HPA-SNS plots using forestplot function
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+#Note: this code is messy but was the quickest way to get this in format needed for the forestplot function
+#used this: https://github.com/brandonyph/Forest-Plot-R-Introduction
+
+library(forestplot)
+fordata <- read.csv("Forest data.csv") 
+
+#######################
+#HPASNSbase
+#######################
+forHPASNSbase <- fordata %>% filter(Relation == "HPA-SNS baseline")
+forHPASNSbase <- as.tibble(forHPASNSbase)
+
+ forHPASNSbase <- forHPASNSbase %>% 
+  mutate(Index2 = row_number())
+ 
+forHPASNSbase <- forHPASNSbase %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forHPASNSbase$R <- as.character(forHPASNSbase$R)
+forHPASNSbase$summary <- as.logical(forHPASNSbase$summary)
+
+#add top part
+forHPASNSbase <- forHPASNSbase %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forHPASNSbase <- forHPASNSbase %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forHPASNSbase <- forHPASNSbase[order(forHPASNSbase$Index2),]
+
+#add bottom part
+forHPASNSbase<- forHPASNSbase %>% 
+  add_row()
+forHPASNSbase <- forHPASNSbase %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.07",
+          mean = 0.07,
+          LL = 0.03,
+          UL = .10)
+forHPASNSbase <- forHPASNSbase %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forHPASNSbase <-forHPASNSbase %>% 
+  select(study, R, summary, mean, lower, upper)
+
+HPASNSbaseNEW <- forHPASNSbase %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+             #clip = c(-0.5, .5), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "33" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "orangered4",
+                            line = "orangered3",
+                            summary = "orangered3"))
+HPASNSbaseNEW 
+
+
+
+
+
+
+#######################
+#HPASNSreact
+#######################
+forHPASNSreact <- fordata %>% filter(Relation == "HPA-SNS reactivity")
+forHPASNSreact <- as.tibble(forHPASNSreact)
+
+ forHPASNSreact <- forHPASNSreact %>% 
+  mutate(Index2 = row_number())
+ 
+forHPASNSreact <- forHPASNSreact %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forHPASNSreact$R <- as.character(forHPASNSreact$R)
+forHPASNSreact$summary <- as.logical(forHPASNSreact$summary)
+
+#add top part
+forHPASNSreact <- forHPASNSreact %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forHPASNSreact <- forHPASNSreact %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forHPASNSreact <- forHPASNSreact[order(forHPASNSreact$Index2),]
+
+#add bottom part
+forHPASNSreact<- forHPASNSreact %>% 
+  add_row()
+forHPASNSreact <- forHPASNSreact %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.09",
+          mean = 0.09,
+          LL = 0.04,
+          UL = .14)
+forHPASNSreact <- forHPASNSreact %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forHPASNSreact <-forHPASNSreact %>% 
+  select(study, R, summary, mean, lower, upper)
+
+HPASNSreactNEW <- forHPASNSreact %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+            #clip = c(-0.5, .5), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "46" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "orangered4",
+                            line = "orangered3",
+                            summary = "orangered3"))
+HPASNSreactNEW 
+
+```
+
+### HPA-PNS plots using forestplot function
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+#Note: this code is messy but was the quickest way to get this in format needed for the forestplot function
+library(forestplot)
+fordata <- read.csv("Forest data.csv") 
+
+#######################
+#HPAPNSbase
+#######################
+forHPAPNSbase <- fordata %>% filter(Relation == "HPA-PNS baseline")
+forHPAPNSbase <- as.tibble(forHPAPNSbase)
+
+ forHPAPNSbase <- forHPAPNSbase %>% 
+  mutate(Index2 = row_number())
+ 
+forHPAPNSbase <- forHPAPNSbase %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forHPAPNSbase$R <- as.character(forHPAPNSbase$R)
+forHPAPNSbase$summary <- as.logical(forHPAPNSbase$summary)
+
+#add top part
+forHPAPNSbase <- forHPAPNSbase %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forHPAPNSbase <- forHPAPNSbase %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forHPAPNSbase <- forHPAPNSbase[order(forHPAPNSbase$Index2),]
+
+#add bottom part
+forHPAPNSbase<- forHPAPNSbase %>% 
+  add_row()
+forHPAPNSbase <- forHPAPNSbase %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.004",
+          mean = 0.004,
+          LL = -0.043,
+          UL = 0.050)
+forHPAPNSbase <- forHPAPNSbase %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forHPAPNSbase <-forHPAPNSbase %>% 
+  select(study, R, summary, mean, lower, upper)
+
+HPAPNSbaseNEW <- forHPAPNSbase %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+             #clip = c(-0.3, .3), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "19" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "sienna3",
+                            line = "sienna2",
+                            summary = "sienna2"))
+HPAPNSbaseNEW 
+
+
+
+
+
+
+#######################
+#HPAPNSreact
+#######################
+forHPAPNSreact <- fordata %>% filter(Relation == "HPA-PNS reactivity")
+forHPAPNSreact <- as.tibble(forHPAPNSreact)
+
+ forHPAPNSreact <- forHPAPNSreact %>% 
+  mutate(Index2 = row_number())
+ 
+forHPAPNSreact <- forHPAPNSreact %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forHPAPNSreact$R <- as.character(forHPAPNSreact$R)
+forHPAPNSreact$summary <- as.logical(forHPAPNSreact$summary)
+
+#add top part
+forHPAPNSreact <- forHPAPNSreact %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forHPAPNSreact <- forHPAPNSreact %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forHPAPNSreact <- forHPAPNSreact[order(forHPAPNSreact$Index2),]
+
+#add bottom part
+forHPAPNSreact<- forHPAPNSreact %>% 
+  add_row()
+forHPAPNSreact <- forHPAPNSreact %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.096",
+          mean = 0.096,
+          LL = 0.036,
+          UL = 0.156)
+forHPAPNSreact <- forHPAPNSreact %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forHPAPNSreact <-forHPAPNSreact %>% 
+  select(study, R, summary, mean, lower, upper)
+
+HPAPNSreactNEW <- forHPAPNSreact %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+            # clip = c(-0.5, .5), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "23" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "sienna3",
+                            line = "sienna2",
+                            summary = "sienna2"))
+HPAPNSreactNEW 
+
+```
+
+### SNS-PNS plots using forestplot function
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+#Note: this code is messy but was the quickest way to get this in format needed for the forestplot function
+library(forestplot)
+fordata <- read.csv("Forest data.csv") 
+
+#######################
+#SNSPNSbase
+#######################
+forSNSPNSbase <- fordata %>% filter(Relation == "SNS-PNS baseline")
+forSNSPNSbase <- as.tibble(forSNSPNSbase)
+
+ forSNSPNSbase <- forSNSPNSbase %>% 
+  mutate(Index2 = row_number())
+ 
+forSNSPNSbase <- forSNSPNSbase %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forSNSPNSbase$R <- as.character(forSNSPNSbase$R)
+forSNSPNSbase$summary <- as.logical(forSNSPNSbase$summary)
+
+#add top part
+forSNSPNSbase <- forSNSPNSbase %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forSNSPNSbase <- forSNSPNSbase %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forSNSPNSbase <- forSNSPNSbase[order(forSNSPNSbase$Index2),]
+
+#add bottom part
+forSNSPNSbase<- forSNSPNSbase %>% 
+  add_row()
+forSNSPNSbase <- forSNSPNSbase %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.02",
+          mean = 0.02,
+          LL = -0.030,
+          UL = 0.075)
+forSNSPNSbase <- forSNSPNSbase %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forSNSPNSbase <-forSNSPNSbase %>% 
+  select(study, R, summary, mean, lower, upper)
+
+SNSPNSbaseNEW <- forSNSPNSbase %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+            # clip = c(-0.3, .3), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "14" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "palevioletred4",
+                            line = "palevioletred3",
+                            summary = "palevioletred3"))
+SNSPNSbaseNEW 
+
+
+
+
+
+
+#######################
+#SNSPNSreact
+#######################
+forSNSPNSreact <- fordata %>% filter(Relation == "SNS-PNS reactivity")
+forSNSPNSreact <- as.tibble(forSNSPNSreact)
+
+ forSNSPNSreact <- forSNSPNSreact %>% 
+  mutate(Index2 = row_number())
+ 
+forSNSPNSreact <- forSNSPNSreact %>% 
+  mutate(mean = R, 
+         summary = "")
+
+forSNSPNSreact$R <- as.character(forSNSPNSreact$R)
+forSNSPNSreact$summary <- as.logical(forSNSPNSreact$summary)
+
+#add top part
+forSNSPNSreact <- forSNSPNSreact %>% 
+  add_row(label = "Study", R = "r", Index2 = 0, summary = TRUE)
+forSNSPNSreact <- forSNSPNSreact %>% 
+  add_row(Index2 = 0)
+
+#sort by index
+forSNSPNSreact <- forSNSPNSreact[order(forSNSPNSreact$Index2),]
+
+#add bottom part
+forSNSPNSreact<- forSNSPNSreact %>% 
+  add_row()
+forSNSPNSreact <- forSNSPNSreact %>% 
+  add_row(label = "Summary",  summary = TRUE,
+          R  = "0.004",
+          mean = 0.004,
+          LL = -0.095,
+          UL = 0.103)
+forSNSPNSreact <- forSNSPNSreact %>% 
+  rename(lower = LL,
+         upper = UL,
+         study = label)
+
+forSNSPNSreact <-forSNSPNSreact %>% 
+  select(study, R, summary, mean, lower, upper)
+
+SNSPNSreactNEW <- forSNSPNSreact %>% 
+  forestplot(labeltext = c(study, R), 
+             is.summary = summary,
+             #clip = c(-0.5, .5), 
+             hrzl_lines = list("3" = gpar(lty = 2), 
+                               "16" = gpar(lwd = 1, columns = 1:3, 
+                                        col = "#000044")),
+             col = fpColors(box = "palevioletred4",
+                            line = "palevioletred3",
+                            summary = "palevioletred3"))
+SNSPNSreactNEW 
+
+```
+
+### Moderator analyses -- methods covars
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+#Note: model output for categ moderators gives estimated effect sizes for that group, not in relation to intercept
+
+### Methods moderators ###
+
+# Time of day
+#First need to better categorize because low cell counts for some
+df$TIMEOFDAY <- as.factor(df$TIMEOFDAY)
+df <- df %>% 
+  mutate(TIMEOFDAY2 = case_when(TIMEOFDAY == 'Afternoon' ~ 'Afternoon_Evening', 
+                        TIMEOFDAY == 'Afternoon and Evening' ~ 'Afternoon_Evening', 
+                        TIMEOFDAY == 'Evening' ~ 'Afternoon_Evening',
+                        TIMEOFDAY == 'Morning' ~ 'Morning_Afternoon',
+                        TIMEOFDAY == 'Morning and Afternoon' ~ 'Morning_Afternoon',
+                        TIMEOFDAY == 'Does not specify' ~ as.character(NA)))
+table(df$TIMEOFDAY)
+table(df$TIMEOFDAY2) 
+df$TIMEOFDAY2 <- as.factor(df$TIMEOFDAY2)
+
+moderator_time <- rma.mv(ES, variance, 
+                     mods = ~ RELATION:I(TIMEOFDAY2) - 1,
+              random = ~ RELATION | ID, 
+              struct = "UN",
+              slab = REF,
+              method = "ML",
+              data =df)
+print(moderator_time, digits = 3)
+
+#Get ks
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "HPA-SNS baseline"), ]
+#5
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "HPA-SNS baseline"), ]
+#23
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "HPA-SNS reactivity"), ]
+#5
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "HPA-SNS reactivity"), ]
+#34
+
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "HPA-PNS baseline"), ]
+#3
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "HPA-PNS baseline"), ]
+#11
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "HPA-PNS reactivity"), ]
+#4
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "HPA-PNS reactivity"), ]
+#13
+
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "SNS-PNS baseline"), ]
+#2
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "SNS-PNS baseline"), ]
+#7
+k <- df[which(df$TIMEOFDAY2 == "Morning_Afternoon" & df$RELATION ==  "SNS-PNS reactivity"), ]
+#2
+k <- df[which(df$TIMEOFDAY2 == "Afternoon_Evening" & df$RELATION ==  "SNS-PNS reactivity"), ]
+#8
+
+
+
+
+
+# Task type
+#First need to recode
+df$STRESS_TASK <- as.factor(df$STRESS_TASK)
+df <- df %>% 
+  mutate(STRESS_TASK2 = case_when(STRESS_TASK == 'Challenge or Emotional Reactivity Task' ~ 'Other', 
+                        STRESS_TASK == 'Lab Tab' ~ 'Other', 
+                        STRESS_TASK == 'Other' ~ 'Other',
+                        STRESS_TASK == 'TSST' ~ 'TSST',
+                        STRESS_TASK == 'TSST speech only' ~ 'TSST',
+                        STRESS_TASK == 'TSST math only' ~ 'TSST'))
+table(df$STRESS_TASK)
+df$STRESS_TASK2 <- as.factor(df$STRESS_TASK2)
+table(df$STRESS_TASK2)
+
+moderator_task <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(STRESS_TASK2) - 1,
+              random = ~ RELATION | ID,
+              #struct = "UN", #did not converge
+              slab = REF,
+              data =df)
+print(moderator_task, digits = 3)
+
+
+#Get ks
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="HPA-SNS baseline"), ]
+#25
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="HPA-SNS baseline"), ]
+#5
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="HPA-SNS reactivity"), ]
+#37
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="HPA-SNS reactivity"), ]
+#6
+
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="HPA-PNS baseline"), ]
+#13
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="HPA-PNS baseline"), ]
+#3
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="HPA-PNS reactivity"), ]
+#15
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="HPA-PNS reactivity"), ]
+#5
+
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="SNS-PNS baseline"), ]
+#11
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="SNS-PNS baseline"), ]
+#0
+k <- df[which(df$STRESS_TASK2 == "TSST" & df$RELATION =="SNS-PNS reactivity"), ]
+#12
+k <- df[which(df$STRESS_TASK2 == "Other" & df$RELATION =="SNS-PNS reactivity"), ]
+#1
+
+
+
+
+
+####Reactivity method####
+
+#HPA react method
+
+#First filter by reactivity relations
+df$HPA_REACT<- as.factor(df$HPA_REACT)
+
+dfHPA <- df %>% 
+  filter(RELATION != "SNS-PNS reactivity") %>% 
+  filter(RELATION != "SNS-PNS baseline") %>% 
+  filter(RELATION != "HPA-SNS baseline") %>% 
+  filter(RELATION != "HPA-PNS baseline") 
+
+table(dfHPA$HPA_REACT) 
+#low cell counts, so going to merge some 
+
+dfHPA <- dfHPA%>% 
+  mutate(HPA_REACT2 = case_when(HPA_REACT == 'Mean score' ~ 'Other', 
+                        HPA_REACT == 'Peak score' ~ 'Other', 
+                        HPA_REACT == 'Residualized change' ~ 'Difference score', 
+                        HPA_REACT == 'AUC' ~ 'AUC',
+                        HPA_REACT == 'Other' ~ 'Other',
+                        HPA_REACT == 'Percent change' ~ 'Difference score',
+                        HPA_REACT == 'Difference score' ~ 'Difference score'))
+table(dfHPA$HPA_REACT2) 
+
+moderator_HPAreact <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(HPA_REACT2) - 1,
+              random = ~ RELATION | ID,
+              struct = "UN", 
+              slab = REF,
+              data =dfHPA)
+print(moderator_HPAreact, digits = 3)
+
+
+#Get ks
+
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "AUC" & dfHPA$RELATION =="HPA-SNS reactivity"), ]
+#11
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "Difference score" & dfHPA$RELATION =="HPA-SNS reactivity"), ]
+#22
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "Other" & dfHPA$RELATION =="HPA-SNS reactivity"), ]
+#9
+
+
+
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "AUC" & dfHPA$RELATION =="HPA-PNS reactivity"), ]
+#2
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "Difference score" & dfHPA$RELATION =="HPA-PNS reactivity"), ]
+#9
+k <- dfHPA[which(dfHPA$HPA_REACT2 == "Other" & dfHPA$RELATION =="HPA-PNS reactivity"), ]
+#9
+
+
+
+
+
+
+#SNS react method
+
+df$SNS_REACT<- as.factor(df$SNS_REACT)
+
+dfSNS <- df %>% 
+  filter(RELATION != "HPA-PNS reactivity") %>% 
+  filter(RELATION != "SNS-PNS baseline") %>% 
+  filter(RELATION != "HPA-SNS baseline") %>% 
+  filter(RELATION != "HPA-PNS baseline") 
+
+table(dfSNS$SNS_REACT) 
+#low cell counts, so going to merge some with "other"
+
+dfSNS <- dfSNS%>% 
+  mutate(SNS_REACT2 = case_when(SNS_REACT == 'Mean score' ~ 'Other', 
+                        SNS_REACT == 'Peak score' ~ 'Other', 
+                        SNS_REACT == 'Residualized change' ~ 'Difference score', 
+                        SNS_REACT == 'AUC' ~ 'AUC',
+                        SNS_REACT == 'Other' ~ 'Other',
+                        SNS_REACT == 'Percent change' ~ 'Difference score',
+                        SNS_REACT == 'Difference score' ~ 'Difference score'))
+table(dfSNS$SNS_REACT2) 
+
+moderator_SNSreact <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(SNS_REACT2) - 1,
+              random = ~ RELATION | ID,
+              struct = "UN", 
+              slab = REF,
+              data =dfSNS)
+print(moderator_SNSreact, digits = 3)
+
+
+#Get ks
+
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "AUC" & dfSNS$RELATION =="HPA-SNS reactivity"), ]
+#10
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "Difference score" & dfSNS$RELATION =="HPA-SNS reactivity"), ]
+#25
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "Other" & dfSNS$RELATION =="HPA-SNS reactivity"), ]
+#7
+
+
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "AUC" & dfSNS$RELATION =="SNS-PNS reactivity"), ]
+#2
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "Difference score" & dfSNS$RELATION =="SNS-PNS reactivity"), ]
+#6
+k <- dfSNS[which(dfSNS$SNS_REACT2 == "Other" & dfSNS$RELATION =="SNS-PNS reactivity"), ]
+#5
+
+
+
+#PNS react method
+
+df$PNS_REACT<- as.factor(df$PNS_REACT)
+
+dfPNS <- df %>% 
+  filter(RELATION != "HPA-SNS reactivity") %>% 
+  filter(RELATION != "SNS-PNS baseline") %>% 
+  filter(RELATION != "HPA-SNS baseline") %>% 
+  filter(RELATION != "HPA-PNS baseline") 
+  
+table(dfPNS$PNS_REACT) 
+#low cell counts, so going to merge some 
+
+dfPNS <- dfPNS%>% 
+  mutate(PNS_REACT2 = case_when(PNS_REACT == 'Mean score' ~ 'Mean score', 
+                        PNS_REACT == 'Residualized change' ~ 'Difference score', 
+                        PNS_REACT == 'Other' ~ 'Other',
+                        PNS_REACT == 'Adjusted difference score' ~ 'Difference score',
+                        PNS_REACT == 'Difference score' ~ 'Difference score'))
+table(dfPNS$PNS_REACT2) 
+
+moderator_PNSreact <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(PNS_REACT2) - 1,
+              random = ~ RELATION | ID,
+              struct = "UN", 
+              slab = REF,
+              data =dfPNS)
+print(moderator_PNSreact, digits = 3)
+
+
+#Get ks
+
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Difference score" & dfPNS$RELATION =="HPA-PNS reactivity"), ]
+#11
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Other" & dfPNS$RELATION =="HPA-PNS reactivity"), ]
+#2 NOW 0 after recode
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Mean score" & dfPNS$RELATION =="HPA-PNS reactivity"), ]
+#7 NOW 9 after recode
+
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Difference score" & dfPNS$RELATION =="SNS-PNS reactivity"), ]
+#7 NOW 8 after recode
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Other" & dfPNS$RELATION =="SNS-PNS reactivity"), ]
+#2 NOW 0 after recode
+k <- dfPNS[which(dfPNS$PNS_REACT2 == "Mean score" & dfPNS$RELATION =="SNS-PNS reactivity"), ]
+#4 NOW 5 after recode
+
+```
+
+### Moderator analyses -- participant characteristics
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+### Sample characteristic moderators ###
+
+
+# Age
+df <- df %>%
+  mutate(AGE_MEAN_YRSC = AGE_MEAN_YRS - mean(AGE_MEAN_YRS))
+           
+moderator_age <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(AGE_MEAN_YRSC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              #struct = "UN", #did not converge
+              data =df)
+print(moderator_age, digits = 3)
+
+
+#Recode age to be child (m age =< 11.99 vs. adolescent m age => 12)
+df <- df %>%
+  mutate(AGE_MEAN_YRS2 = case_when(AGE_MEAN_YRS <= 11.99 ~ 'Child',
+                        AGE_MEAN_YRS >= 12 ~ 'Adolescent'))
+table(df$AGE_MEAN_YRS2)
+
+#Dichotomized age
+moderator_agedi <- rma.mv(ES, variance,
+              mods = ~ RELATION:I(AGE_MEAN_YRS2) - 1,
+              random = ~ RELATION | ID,
+              slab = REF,
+              method = "ML",
+              #struct = "UN",#did not converge
+              data =df)
+print(moderator_agedi, digits = 3)
+
+#Get ks
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="HPA-SNS baseline"), ]
+#13
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="HPA-SNS baseline"), ]
+#17
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="HPA-SNS reactivity"), ]
+#19
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="HPA-SNS reactivity"), ]
+#24
+
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="HPA-PNS baseline"), ]
+#6
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="HPA-PNS baseline"), ]
+#10
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="HPA-PNS reactivity"), ]
+#9
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="HPA-PNS reactivity"), ]
+#11
+
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="SNS-PNS baseline"), ]
+#4
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="SNS-PNS baseline"), ]
+#7
+k <- df[which(df$AGE_MEAN_YRS2 == "Child" & df$RELATION =="SNS-PNS reactivity"), ]
+#5
+k <- df[which(df$AGE_MEAN_YRS2 == "Adolescent" & df$RELATION =="SNS-PNS reactivity"), ]
+#8
+
+
+
+
+
+# Puberty -- 9 ppl
+df <- df %>%
+  mutate(PUBERTYC = PUBERTY - mean(PUBERTY, na.rm=T))
+moderator_puberty <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(PUBERTYC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              struct = "UN", 
+              data =df)
+print(moderator_puberty, digits = 3)
+
+
+
+# Percent female 
+df <- df %>%
+  mutate(SEX_PFEMALEC = SEX_PFEMALE - mean(SEX_PFEMALE, na.rm=T))
+
+moderator_sex <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(SEX_PFEMALEC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              struct = "UN",
+              data =df)
+print(moderator_sex, digits =3)
+
+
+# Percent White
+df <- df %>%
+  mutate(RACE_PWHITEC = RACE_PWHITE - mean(RACE_PWHITE, na.rm=T))
+
+moderator_white <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(RACE_PWHITEC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              #struct = "UN", #did not converge
+              data =df)
+print(moderator_white, digits = 3)
+
+
+#Percent Black
+df <- df %>%
+  mutate(RACE_PBLACKC = RACE_PBLACK - mean(RACE_PBLACK, na.rm=T))
+
+moderator_black <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(RACE_PBLACKC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              struct = "UN",
+              data =df)
+print(moderator_black, digits = 3)
+
+#Percent Hispanic 
+df <- df %>%
+  mutate(RACE_PHISPANICC = RACE_PHISPANIC - mean(RACE_PHISPANIC, na.rm=T))
+
+moderator_hispanic <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(RACE_PHISPANICC),
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              struct = "UN",
+              data =df)
+print(moderator_hispanic, digits = 3)
+
+
+
+
+# SES
+df$Low_SES <- as.factor(df$Low_SES)
+moderator_SES <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(Low_SES) - 1,
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+             # struct = "UN",
+              data =df)
+print(moderator_SES, digits = 3)
+table(df$Low_SES)
+
+
+#Get ks
+k <- df[which(df$Low_SES == 0 & df$RELATION =="HPA-SNS baseline"), ]
+#12
+k <- df[which(df$Low_SES == 1 & df$RELATION =="HPA-SNS baseline"), ]
+#10
+k <- df[which(df$Low_SES == 0 & df$RELATION =="HPA-SNS reactivity"), ]
+#17
+k <- df[which(df$Low_SES == 1 & df$RELATION =="HPA-SNS reactivity"), ]
+#12
+
+k <- df[which(df$Low_SES == 0 & df$RELATION =="HPA-PNS baseline"), ]
+#10
+k <- df[which(df$Low_SES == 1 & df$RELATION =="HPA-PNS baseline"), ]
+#3
+k <- df[which(df$Low_SES == 0 & df$RELATION =="HPA-PNS reactivity"), ]
+#13
+k <- df[which(df$Low_SES == 1 & df$RELATION =="HPA-PNS reactivity"), ]
+#3
+
+k <- df[which(df$Low_SES == 0 & df$RELATION =="SNS-PNS baseline"), ]
+#6
+k <- df[which(df$Low_SES == 1 & df$RELATION =="SNS-PNS baseline"), ]
+#2
+k <- df[which(df$Low_SES == 0 & df$RELATION =="SNS-PNS reactivity"), ]
+#7
+k <- df[which(df$Low_SES == 1 & df$RELATION =="SNS-PNS reactivity"), ]
+#2
+
+
+
+
+# Adversity type
+df$ADVERS_DI <- as.factor(df$ADVERS_DI)
+moderator_adversity <- rma.mv(ES, variance, 
+              mods = ~ RELATION:I(ADVERS_DI) - 1,
+              random = ~ RELATION | ID, 
+              slab = REF,
+              method = "ML",
+              #struct = "UN", #did not converge
+              data =df)
+print(moderator_adversity, digits = 3)
+table(df$ADVERS_DI)
+
+
+#Get ks
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="HPA-SNS baseline"), ]
+#20
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="HPA-SNS baseline"), ]
+#8
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="HPA-SNS reactivity"), ]
+#30
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="HPA-SNS reactivity"), ]
+#11
+
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="HPA-PNS baseline"), ]
+#10
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="HPA-PNS baseline"), ]
+#5
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="HPA-PNS reactivity"), ]
+#14
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="HPA-PNS reactivity"), ]
+#5
+
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="SNS-PNS baseline"), ]
+#7
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="SNS-PNS baseline"), ]
+#4
+k <- df[which(df$ADVERS_DI == 0 & df$RELATION =="SNS-PNS reactivity"), ]
+#9
+k <- df[which(df$ADVERS_DI == 1 & df$RELATION =="SNS-PNS reactivity"), ]
+#4
+
+
+
+```
+
+### Test for biases 
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+#Sought guidance on stat exchange for testing biases for multivariate models:
+#https://stats.stackexchange.com/questions/155693/metafor-package-bias-and-sensitivity-diagnostics
+#The suggestions here are different than pre-reg, so will note that in paper
+
+#Bias test #1: Egger's test (Egger et al., 1997)
+test_egger <- rma.mv(ES,variance, 
+                     mod = ~ RELATION:I(variance),
+                     random = ~ RELATION | ID,  
+                    #struct = "UN", #would not converge with this setting
+                     slab = REF,
+                     method = "ML",
+                     data =df)
+print(test_egger, digits = 3)
+
+
+# Bias test #2: Cook's distance 
+# cooks <- cooks.distance(main_model)
+# plot(cooks, type="o", pch=19)
+# png(filename = "CooksDistancePlot.png", 
+#     width = 800, height = 640, 
+#     pointsize = 12, res = 120)
+# plot(cooks, type="o", pch=19)
+# dev.off() #potentially one or two having a disproportionate influence on the overall summary estimate
+# 
+# summary(cooks)
+# #    Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+# # 0.00002 0.00381 0.03728 0.13454 0.13685 1.02214      77 
+# 
+# # View outliers with Cooks > 3 * mean
+# outliers_cooks <- cooks %>% 
+#   cbind(df$REF) %>%                   # bind study names for reference
+#   subset(cooks > 3*0.13454) %>% # subset outliers
+#   View() 
+# # 4 outliers
+# 
+# #Select all cases except for outliers (figure out better way of doing this later bc the tidyverse way I tried kept failing and I dont have time)
+# #Busso 2:7
+# #Busso 3:8
+# #Ellis 2: 32
+# #Obradovic 1:84
+# df_outliers_dropped <- df[c(1:6, 9:31, 33:83,85:127 ),]
+# 
+# #Run model without outliers
+# main_model_outlier <- rma.mv(ES, variance, mods = ~ RELATION - 1,
+#               random = ~ RELATION | ID, 
+#               struct = "UN",
+#               slab = REF,
+#               method = "ML",
+#               data = df_outliers_dropped)
+# print(main_model_outlier, digits = 2)
+#same effects so going with full model
+
+```
+
+## Descriptive plots:age
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+########age
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS baseline')
+AGE_HPASNS_base <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("HPA-SNS resting baseline") +
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_HPASNS_base.png", width = 4, height = 4)
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS reactivity')
+AGE_HPASNS_react <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("HPA-SNS reactivity")+
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_HPASNS_react.png", width = 4, height = 4)
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS baseline')
+AGE_HPAPNS_base <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("HPA-PNS resting baseline")+
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_HPAPNS_base.png", width = 4, height = 4)
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS reactivity')
+AGE_HPAPNS_react <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("HPA-PNS reactivity") +
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_HPAPNS_react.png", width = 4, height = 4)
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS baseline')
+AGE_SNSPNS_base <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("SNS-PNS resting baseline") +
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_SNSPNS_base.png", width = 4, height = 4)
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS reactivity')
+AGE_SNSPNS_react <- ggplot(dfplot, aes(x=AGE_MEAN_YRS, y=ES))+
+  geom_point() +
+  theme_classic () +
+  stat_smooth(method=loess) +
+  ylab("Effect size") +
+  xlab("Mean sample age (years)") +
+  ggtitle ("SNS-PNS reactivity")+
+  scale_y_continuous(limits=c(-0.6, 0.6))
+ggsave("AGE_SNSPNS_react.png", width = 4, height = 4)
+
+```
+
+
+## Descriptive plots: SES
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+########
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS baseline') %>%
+  filter(!is.na(Low_SES))
+SES_HPASNS_base <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("HPA-SNS resting baseline")
+ggsave("SES_HPASNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS reactivity') %>%
+  filter(!is.na(Low_SES))
+SES_HPASNS_react <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("HPA-SNS reactivity")
+ggsave("SES_HPASNS_react.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS baseline') %>%
+  filter(!is.na(Low_SES))
+SES_HPAPNS_base <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("HPA-PNS resting baseline")
+ggsave("SES_HPAPNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS reactivity') %>%
+  filter(!is.na(Low_SES))
+SES_HPAPNS_react <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  theme_classic() +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("HPA-PNS reactivity")
+ggsave("SES_HPAPNS_react.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS baseline') %>%
+  filter(!is.na(Low_SES))
+SES_SNSPNS_base <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("SNS-PNS resting baseline")
+ggsave("SES_SNSPNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS reactivity') %>%
+  filter(!is.na(Low_SES))
+SES_SNSPNS_react <- ggplot(dfplot, aes(x=as.factor(Low_SES), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Higher SES", "1" = "Lower SES")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("") +
+  ggtitle("SNS-PNS reactivity")
+ggsave("SES_SNSPNS_react.png", width = 4, height = 4)
+
+
+
+```
+
+
+## Descriptive plots: adversity
+```{r, warning=FALSE, echo=TRUE, include=TRUE, message=FALSE}
+
+########
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS baseline') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_HPASNS_base <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("HPA-SNS resting baseline")
+ggsave("ADVERS_HPASNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-SNS reactivity') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_HPASNS_react <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("HPA-SNS reactivity")
+ggsave("ADVERS_HPASNS_react.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS baseline') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_HPAPNS_base <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("HPA-PNS resting baseline")
+ggsave("ADVERS_HPAPNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'HPA-PNS reactivity') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_HPAPNS_react <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("HPA-PNS reactivity")
+ggsave("ADVERS_HPAPNS_react.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS baseline') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_SNSPNS_base <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("SNS-PNS resting baseline")
+ggsave("ADVERS_SNSPNS_base.png", width = 4, height = 4)
+
+
+dfplot <- df %>% 
+  filter(RELATION == 'SNS-PNS reactivity') %>%
+  filter(!is.na(ADVERS_DI))
+ADVERS_SNSPNS_react <- ggplot(dfplot, aes(x=as.factor(ADVERS_DI), y=ES)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, size = 1, color = "black") +
+  scale_x_discrete(labels = c("0" = "Not present", "1" = "Present")) +
+  scale_y_continuous(limits=c(-0.6, 0.6)) +
+  theme_classic() +
+  ylab("Effect size") +
+  xlab("Sample adversity exposure") +
+  ggtitle("SNS-PNS reactivity")
+ggsave("ADVERS_SNSPNS_react.png", width = 4, height = 4)
+
+
+
+```
+
+
